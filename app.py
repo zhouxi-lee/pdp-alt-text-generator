@@ -1,3 +1,15 @@
+import streamlit as st
+import traceback
+
+try:
+    # (아래에 기존 app.py 전체 코드를 들여쓰기 없이 붙여넣으세요)
+    # ...
+except Exception as e:
+    st.error("앱 실행 중 예외가 발생했습니다:")
+    st.error(f"{e}")
+    st.text(traceback.format_exc())
+    st.stop()
+
 import os
 import re
 import streamlit as st

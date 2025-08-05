@@ -8,4 +8,4 @@ transformers
 torch
 ultralytics
 requests
-+easyocr
+easyocr

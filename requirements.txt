@@ -6,6 +6,5 @@ scikit-image
 pandas
 transformers
 torch
-ultralytics
 requests
 easyocr

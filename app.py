@@ -160,15 +160,19 @@ if "candidates" in st.session_state:
     st.code(choice)
 
 # -----------------------------
-# OCR 실행 (EasyOCR, 지연 로딩)
+# OCR 실행 (EasyOCR, 지연 로딩) with exception handling
 # -----------------------------
 if st.button("🚀 OCR 실행 (EasyOCR)", key="ocr_btn"):
     if reader is None:
         with st.spinner("모델 로딩 중… 잠시만 기다려주세요"):
             r, p, m = load_models()
             reader, processor, blip_model = r, p, m
-    txt = extract_text_via_easyocr(img)
-    lines = txt.split("\n")
+    try:
+        txt = extract_text_via_easyocr(img)
+        lines = txt.split("\n")
+    except Exception:
+        st.error("이미지를 처리할 수 없습니다. 다른 이미지를 시도해주세요.")
+        st.stop()
     st.session_state["ocr_done"] = True
     st.session_state["ocr_text"] = txt
     st.session_state["classified"] = classify_elements(lines)

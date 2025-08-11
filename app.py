@@ -4,10 +4,14 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
 import easyocr
-from transformers import BlipProcessor, BlipForConditionalGeneration
 import torch
+
+# transformers: AutoProcessor 먼저 시도, 안되면 BlipProcessor로 폴백
+try:
+    from transformers import AutoProcessor as BlipLikeProcessor, BlipForConditionalGeneration
+except Exception:
+    from transformers import BlipProcessor as BlipLikeProcessor, BlipForConditionalGeneration
 
 # 페이지 설정: 중앙 정렬
 st.set_page_config(
@@ -29,7 +33,7 @@ st.markdown("""
 @st.cache_resource
 def load_models():
     reader = easyocr.Reader(['en'], gpu=False)
-    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+    processor = BlipLikeProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
     blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
     return reader, processor, blip_model
 
@@ -42,7 +46,7 @@ blip_model = None
 PRODUCT_KEYWORDS = {
     "refrigerator","fridge","tvmonitor","tv","oven",
     "microwave","washing machine","dishwasher",
-    "laptop","cell phone","mobile","camera"
+    "laptop","cell phone","mobile","camera","vacuum","washer","dryer"
 }
 
 # -----------------------------
@@ -84,25 +88,57 @@ def extract_text_via_easyocr(pil_img: Image.Image) -> str:
 # -----------------------------
 def generate_blip_caption(pil_img: Image.Image) -> str:
     global processor, blip_model
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    inputs = processor(images=pil_img, return_tensors="pt").to(device)
-    blip_model.to(device)
-    out = blip_model.generate(**inputs, max_length=50)
-    return processor.decode(out[0], skip_special_tokens=True)
+    # BLIP 모델이 아직 안 로드되었을 수 있으므로 방어
+    if processor is None or blip_model is None:
+        return "An LG product image"
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        inputs = processor(images=pil_img, return_tensors="pt").to(device)
+        blip_model.to(device)
+        out = blip_model.generate(**inputs, max_length=50)
+        return processor.decode(out[0], skip_special_tokens=True)
+    except Exception:
+        # 생성 실패 시 폴백
+        return "An LG product in a scene"
+
+def trim_caption(text: str) -> str:
+    # 150자 초과 시에만 잘라내고, 125자 미만은 그대로 유지
+    return text if len(text) <= 150 else text[:150]
+
+def _has_product_hint(*texts):
+    # BLIP 캡션/ OCR 텍스트에 제품 키워드나 'lg'가 있으면 True
+    keys = set(k.lower() for k in PRODUCT_KEYWORDS) | {"lg"}
+    joined = " ".join(t.lower() for t in texts if t)
+    return any(k in joined for k in keys)
 
 # -----------------------------
-# Alt Text 후보 생성
+# Alt Text 후보 생성 (LG product 자동 부착)
 # -----------------------------
 def make_alt_candidates(pil_img: Image.Image):
     base = generate_blip_caption(pil_img)
-    candidates = [base, f"{base} in a modern environment"]
-    # LG 제품 키워드 추가 옵션
-    if any(o.lower() in PRODUCT_KEYWORDS for o in []):
-        candidates.append(f"LG product - {base}")
-    # 중복 제거 및 최대 3개
+
+    # OCR 텍스트(있다면)와 함께 제품 힌트 감지
+    ocr_text = st.session_state.get("ocr_text", "")
+    has_hint = _has_product_hint(base, ocr_text)
+
+    candidates = []
+    if has_hint:
+        # 제품 힌트가 있으면 'LG product' 문구를 붙인 후보 위주로 2~3개
+        prefixed = f"LG product - {base}"
+        appended = f"{base} (LG product)"
+        candidates.append(trim_caption(prefixed))
+        candidates.append(trim_caption(f"{prefixed} in a modern environment"))
+        candidates.append(trim_caption(appended))
+    else:
+        # 힌트가 없으면 일반 후보 2~3개
+        candidates.append(trim_caption(base))
+        candidates.append(trim_caption(f"{base} in a modern environment"))
+        candidates.append(trim_caption("A lifestyle image showcasing a product"))
+
+    # 중복 제거하고 최대 3개만 반환
     unique = []
     for c in candidates:
-        if c not in unique:
+        if c and c not in unique:
             unique.append(c)
         if len(unique) == 3:
             break
@@ -151,7 +187,10 @@ if st.button("🖼️ Alt Text 생성", key="alt_btn"):
     with st.spinner("모델 로딩 중… 잠시만 기다려주세요"):
         r, p, m = load_models()
         reader, processor, blip_model = r, p, m
-    st.session_state["candidates"] = make_alt_candidates(img)
+    try:
+        st.session_state["candidates"] = make_alt_candidates(img)
+    except Exception:
+        st.session_state["candidates"] = ["LG product - An image", "An image (LG product)"]
     st.session_state.pop("choice", None)
 
 if "candidates" in st.session_state:
@@ -190,8 +229,11 @@ if st.session_state.get("ocr_done"):
     with st.expander("🧩 컴포넌트 추천"):
         recs = st.session_state.get("recs", [])
         if recs:
-            sel = st.selectbox("추천된 컴포넌트 중 하나를 선택하세요:", recs,
-                               format_func=lambda cid: f"{cid} – {COMPONENT_DEFS[cid]['name']}")
+            sel = st.selectbox(
+                "추천된 컴포넌트 중 하나를 선택하세요:",
+                recs,
+                format_func=lambda cid: f"{cid} – {COMPONENT_DEFS[cid]['name']}"
+            )
             st.markdown(f"**Selected Component:** {sel} – {COMPONENT_DEFS[sel]['name']}")
             st.session_state["selected_component"] = sel
         else:
